@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Home Search GIS - Phase 1</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    :root { --accent: #2a5d8f; --bg: #f6f6f6; --panel: #ffffff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+    header { padding: 12px 14px; background: var(--panel); border-bottom: 1px solid #ddd; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; color: #222; }
+    #search-form { display: flex; gap: 6px; flex: 1 1 240px; min-width: 200px; }
+    #search-input { flex: 1; padding: 9px 10px; font-size: 15px; border: 1px solid #bbb; border-radius: 4px; min-height: 40px; }
+    button { padding: 9px 12px; font-size: 14px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; min-height: 40px; cursor: pointer; }
+    button:active { opacity: 0.85; }
+    #map { flex: 1; width: 100%; }
+    #status { position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 10px 12px; background: rgba(255,255,255,0.95); border-radius: 6px; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.15); display: none; }
+    #status.visible { display: block; }
+    #status.inside { border-left: 4px solid #c0392b; }
+    #status.outside { border-left: 4px solid #27ae60; }
+    #layer-toggles { position: absolute; top: 70px; right: 8px; background: var(--panel); padding: 8px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.15); font-size: 13px; }
+    #layer-toggles label { display: block; padding: 3px 0; cursor: pointer; }
+    #boundary-note { position: absolute; top: 155px; right: 8px; background: rgba(255,255,255,0.92); padding: 6px 8px; border-radius: 4px; font-size: 11px; color: #666; max-width: 180px; line-height: 1.4; }
+    .attrib { font-size: 11px; color: #666; padding: 6px 10px; background: rgba(255,255,255,0.85); }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Home Search GIS -- Phase 1</h1>
+    <form id="search-form" autocomplete="off">
+      <input id="search-input" type="text" placeholder="Address (e.g. 1234 Pin Oak, Katy TX)" />
+      <button type="submit">Find</button>
+    </form>
+    <button id="locate-btn" title="Use my location">Locate me</button>
+  </header>
+  <div id="map" aria-label="Map"></div>
+  <div id="layer-toggles" role="group" aria-label="Layers">
+    <label><input type="checkbox" id="fema-toggle" /> FEMA flood zones</label>
+    <label><input type="checkbox" id="boundary-toggle" checked /> Addicks/Barker watershed</label>
+  </div>
+  <div id="boundary-note">
+    Watershed = drainage catchment area (HCFCD). Not the same as storm pool extent during Harvey.
+  </div>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div class="attrib">
+    Map: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &middot;
+    Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> &middot;
+    Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a> &middot;
+    Watershed: <a href="https://www.hcfcd.org" target="_blank" rel="noopener">HCFCD</a>
+  </div>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+<script>
+(function () {
+  var KATY = [-95.8245, 29.7858];
+
+  // HCFCD Watershed REST service -- Addicks (OBJECTID 1) + Barker (OBJECTID 4).
+  // Public ArcGIS REST endpoint; no API key required.
+  var WATERSHED_URL =
+    'https://www.gis.hctx.net/arcgishcpid/rest/services/HCFCD/Watershed/MapServer/1/query' +
+    '?where=OBJECTID+IN+(1%2C4)&outFields=WTSHNAME%2CWTSHUNIT&f=geojson&outSR=4326';
+
+  var statusEl = document.getElementById('status');
+
+  function showStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = 'visible' + (cls ? ' ' + cls : '');
+  }
+
+  function hideStatus() { statusEl.className = ''; }
+
+  var map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: KATY,
+    zoom: 12,
+    attributionControl: false
+  });
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'top-left');
+  map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-left');
+
+  map.on('load', function () {
+    map.addSource('boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+      id: 'boundary-fill',
+      type: 'fill',
+      source: 'boundary',
+      paint: { 'fill-color': '#e63946', 'fill-opacity': 0.18 }
+    });
+    map.addLayer({
+      id: 'boundary-line',
+      type: 'line',
+      source: 'boundary',
+      paint: { 'line-color': '#b11226', 'line-width': 2 }
+    });
+
+    // Load Addicks + Barker watershed polygons from live HCFCD service.
+    fetch(WATERSHED_URL)
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (geojson) {
+        map.getSource('boundary').setData(geojson);
+      })
+      .catch(function (err) {
+        console.warn('HCFCD watershed fetch failed:', err.message,
+          '-- CORS may block browser requests; see README for proxy option.');
+      });
+
+    // FEMA NFHL WMS raster layer (flood zone designations). Hidden by default.
+    map.addSource('fema-nfhl', {
+      type: 'raster',
+      tiles: [
+        'https://hazards.fema.gov/arcgis/rest/services/public/NFHLWMS/MapServer/WMSServer' +
+        '?service=WMS&request=GetMap&version=1.3.0&layers=28&styles=&format=image/png&transparent=true' +
+        '&crs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'
+      ],
+      tileSize: 256
+    });
+    map.addLayer({
+      id: 'fema-nfhl-layer',
+      type: 'raster',
+      source: 'fema-nfhl',
+      paint: { 'raster-opacity': 0.55 },
+      layout: { visibility: 'none' }
+    });
+
+    document.getElementById('fema-toggle').addEventListener('change', function (e) {
+      map.setLayoutProperty('fema-nfhl-layer', 'visibility', e.target.checked ? 'visible' : 'none');
+    });
+    document.getElementById('boundary-toggle').addEventListener('change', function (e) {
+      var v = e.target.checked ? 'visible' : 'none';
+      map.setLayoutProperty('boundary-fill', 'visibility', v);
+      map.setLayoutProperty('boundary-line', 'visibility', v);
+    });
+  });
+
+  // Photon geocoding search.
+  document.getElementById('search-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var q = document.getElementById('search-input').value.trim();
+    if (!q) return;
+    showStatus('Searching...');
+    fetch('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.features || !data.features.length) {
+          showStatus('No match. Try a nearby intersection or landmark.'); return;
+        }
+        var coords = data.features[0].geometry.coordinates;
+        map.flyTo({ center: coords, zoom: 15 });
+        new maplibregl.Marker({ color: '#2a5d8f' }).setLngLat(coords).addTo(map);
+        checkPointInBoundary(coords);
+      })
+      .catch(function () { showStatus('Photon error -- check network.'); });
+  });
+
+  // Point-in-polygon check against the loaded watershed polygons.
+  function checkPointInBoundary(coords) {
+    var src = map.getSource('boundary');
+    var data = src && src._data;
+    if (!data || !data.features || !data.features.length) {
+      showStatus('Located. Watershed boundary not yet loaded -- result shown without watershed check.'); return;
+    }
+    var pt = turf.point(coords);
+    var matchName = null;
+    data.features.forEach(function (feat) {
+      try {
+        if (turf.booleanPointInPolygon(pt, feat)) {
+          matchName = feat.properties && feat.properties.WTSHNAME || 'Addicks/Barker';
+        }
+      } catch (e) {}
+    });
+    if (matchName) {
+      showStatus('INSIDE ' + matchName + ' watershed. Property drains into this reservoir.', 'inside');
+    } else {
+      showStatus('OUTSIDE Addicks and Barker watersheds.', 'outside');
+    }
+  }
+
+  // Browser geolocation.
+  document.getElementById('locate-btn').addEventListener('click', function () {
+    if (!navigator.geolocation) { showStatus('Geolocation not supported.'); return; }
+    showStatus('Locating...');
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        var c = [pos.coords.longitude, pos.coords.latitude];
+        map.flyTo({ center: c, zoom: 15 });
+        new maplibregl.Marker({ color: '#2a5d8f' }).setLngLat(c).addTo(map);
+        checkPointInBoundary(c);
+      },
+      function () { showStatus('Location denied.'); },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  });
+
+})();
+</script>
+</body>
+</html>
