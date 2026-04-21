@@ -44,8 +44,8 @@
   </header>
   <div id="map" aria-label="Map"></div>
   <div id="layer-toggles" role="group" aria-label="Layers">
-    <label><input type="checkbox" id="fema-toggle" /> FEMA flood zones</label>
     <label><input type="checkbox" id="brazos-toggle" checked /> Brazos River channel</label>
+    <div style="padding:3px 0;font-size:12px;color:#888;line-height:1.4;">FEMA visual map:<br><a href="https://msc.fema.gov/portal/search" target="_blank" rel="noopener" style="color:#2a5d8f;">msc.fema.gov</a></div>
   </div>
   <div id="status" role="status" aria-live="polite"></div>
   <div class="attrib">
@@ -60,8 +60,6 @@
 (function () {
   var KATY = [-95.7585, 29.7490];
   var statusEl = document.getElementById('status');
-  var femaActive = false;
-
   function showStatus(msg, riskClass) {
     statusEl.textContent = msg;
     statusEl.className = 'visible' + (riskClass ? ' ' + riskClass : '');
@@ -93,83 +91,12 @@
       })
       .catch(function () { console.warn('Brazos GeoJSON not found -- serve from same directory as HTML.'); });
 
-    // FEMA flood zone polygons -- queried live from REST API, rendered as vector layer.
-    map.addSource('fema-zones', {
-      type: 'geojson',
-      data: { type: 'FeatureCollection', features: [] }
-    });
-    map.addLayer({
-      id: 'fema-fill',
-      type: 'fill',
-      source: 'fema-zones',
-      layout: { visibility: 'none' },
-      paint: {
-        'fill-color': [
-          'match', ['get', 'SFHA_TF'],
-          'T', '#e74c3c',
-          '#27ae60'
-        ],
-        'fill-opacity': 0.22
-      }
-    });
-    map.addLayer({
-      id: 'fema-line',
-      type: 'line',
-      source: 'fema-zones',
-      layout: { visibility: 'none' },
-      paint: {
-        'line-color': [
-          'match', ['get', 'SFHA_TF'],
-          'T', '#c0392b',
-          '#1e8449'
-        ],
-        'line-width': 1.2
-      }
-    });
-
-    document.getElementById('fema-toggle').addEventListener('change', function (e) {
-      femaActive = e.target.checked;
-      var v = femaActive ? 'visible' : 'none';
-      map.setLayoutProperty('fema-fill', 'visibility', v);
-      map.setLayoutProperty('fema-line', 'visibility', v);
-      if (femaActive) {
-        loadFemaZones();
-      } else {
-        map.getSource('fema-zones').setData({ type: 'FeatureCollection', features: [] });
-      }
-    });
-
-    map.on('moveend', function () {
-      if (femaActive) loadFemaZones();
-    });
-
     document.getElementById('brazos-toggle').addEventListener('change', function (e) {
       if (map.getLayer('brazos-line')) {
         map.setLayoutProperty('brazos-line', 'visibility', e.target.checked ? 'visible' : 'none');
       }
     });
   });
-
-  // Fetch FEMA flood zone polygons for the current map extent via REST API.
-  function loadFemaZones() {
-    if (map.getZoom() < 10) {
-      console.info('Zoom in further to load FEMA zone boundaries.');
-      return;
-    }
-    var b = map.getBounds();
-    var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
-    var url = 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query' +
-      '?geometry=' + encodeURIComponent(bbox) +
-      '&geometryType=esriGeometryEnvelope&inSR=4326' +
-      '&outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF' +
-      '&returnGeometry=true&outSR=4326&f=geojson';
-    fetch(url)
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        map.getSource('fema-zones').setData(data);
-      })
-      .catch(function () { console.warn('FEMA zone polygon fetch failed.'); });
-  }
 
   // Query FEMA NFHL point-in-polygon via live REST API call.
   function checkFloodZone(coords) {
