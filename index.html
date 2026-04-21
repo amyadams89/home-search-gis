@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Home Search GIS - Phase 1</title>
+  <title>Home Search GIS - Phase 1 Scaffold</title>
   <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
   <style>
     :root { --accent: #2a5d8f; --bg: #f6f6f6; --panel: #ffffff; }
@@ -17,14 +17,19 @@
     button { padding: 9px 12px; font-size: 14px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; min-height: 40px; cursor: pointer; }
     button:active { opacity: 0.85; }
     #map { flex: 1; width: 100%; }
-    #status { position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 10px 12px; background: rgba(255,255,255,0.95); border-radius: 6px; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.15); display: none; }
+    #status { position: absolute; bottom: 36px; left: 8px; right: 8px; padding: 10px 12px; background: rgba(255,255,255,0.95); border-radius: 6px; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.15); display: none; }
     #status.visible { display: block; }
-    #status.inside { border-left: 4px solid #c0392b; }
-    #status.outside { border-left: 4px solid #27ae60; }
+    #status.high-risk { border-left: 4px solid #c0392b; }
+    #status.low-risk { border-left: 4px solid #27ae60; }
     #layer-toggles { position: absolute; top: 70px; right: 8px; background: var(--panel); padding: 8px 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.15); font-size: 13px; }
     #layer-toggles label { display: block; padding: 3px 0; cursor: pointer; }
-    #boundary-note { position: absolute; top: 155px; right: 8px; background: rgba(255,255,255,0.92); padding: 6px 8px; border-radius: 4px; font-size: 11px; color: #666; max-width: 180px; line-height: 1.4; }
     .attrib { font-size: 11px; color: #666; padding: 6px 10px; background: rgba(255,255,255,0.85); }
+    .disclaimer-banner {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 10px 14px; background: rgba(255,255,255,0.95);
+      font-size: 13px; text-align: center; color: #666;
+      border-top: 1px solid #ddd;
+    }
   </style>
 </head>
 <body>
@@ -40,38 +45,26 @@
   <div id="map" aria-label="Map"></div>
   <div id="layer-toggles" role="group" aria-label="Layers">
     <label><input type="checkbox" id="fema-toggle" /> FEMA flood zones</label>
-    <label><input type="checkbox" id="boundary-toggle" checked /> Addicks/Barker watershed</label>
-  </div>
-  <div id="boundary-note">
-    Watershed = drainage catchment area (HCFCD). Not the same as storm pool extent during Harvey.
+    <label><input type="checkbox" id="brazos-toggle" checked /> Brazos River channel</label>
   </div>
   <div id="status" role="status" aria-live="polite"></div>
   <div class="attrib">
-    Map: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &middot;
-    Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> &middot;
-    Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a> &middot;
-    Watershed: <a href="https://www.hcfcd.org" target="_blank" rel="noopener">HCFCD</a>
+    Tiles: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> + <a href="https://www.openmaptiles.org" target="_blank" rel="noopener">OpenMapTiles</a> - Data: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> - Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> - Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a>
+  </div>
+  <div id="disclaimer" class="disclaimer-banner">
+    This tool provides informational overlays only and is not an official flood insurance determination. Consult FEMA maps and a licensed floodplain manager for insurance and disclosure purposes.
   </div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
 <script>
 (function () {
-  var KATY = [-95.8245, 29.7858];
-
-  // HCFCD Watershed REST service -- Addicks (OBJECTID 1) + Barker (OBJECTID 4).
-  // Public ArcGIS REST endpoint; no API key required.
-  var WATERSHED_URL =
-    'https://www.gis.hctx.net/arcgishcpid/rest/services/HCFCD/Watershed/MapServer/1/query' +
-    '?where=OBJECTID+IN+(1%2C4)&outFields=WTSHNAME%2CWTSHUNIT&f=geojson&outSR=4326';
-
+  var KATY = [-95.7585, 29.7490];
   var statusEl = document.getElementById('status');
 
-  function showStatus(msg, cls) {
+  function showStatus(msg, riskClass) {
     statusEl.textContent = msg;
-    statusEl.className = 'visible' + (cls ? ' ' + cls : '');
+    statusEl.className = 'visible' + (riskClass ? ' ' + riskClass : '');
   }
-
   function hideStatus() { statusEl.className = ''; }
 
   var map = new maplibregl.Map({
@@ -85,35 +78,21 @@
   map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-left');
 
   map.on('load', function () {
-    map.addSource('boundary', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({
-      id: 'boundary-fill',
-      type: 'fill',
-      source: 'boundary',
-      paint: { 'fill-color': '#e63946', 'fill-opacity': 0.18 }
-    });
-    map.addLayer({
-      id: 'boundary-line',
-      type: 'line',
-      source: 'boundary',
-      paint: { 'line-color': '#b11226', 'line-width': 2 }
-    });
-
-    // Load Addicks + Barker watershed polygons from live HCFCD service.
-    fetch(WATERSHED_URL)
-      .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
+    // Brazos River channel (Fort Bend County effective flow boundary -- LineString).
+    fetch('./brazos_river.geojson')
+      .then(function (r) { return r.json(); })
+      .then(function (geo) {
+        map.addSource('brazos', { type: 'geojson', data: geo });
+        map.addLayer({
+          id: 'brazos-line',
+          type: 'line',
+          source: 'brazos',
+          paint: { 'line-color': '#2471a3', 'line-width': 2.5, 'line-opacity': 0.85 }
+        });
       })
-      .then(function (geojson) {
-        map.getSource('boundary').setData(geojson);
-      })
-      .catch(function (err) {
-        console.warn('HCFCD watershed fetch failed:', err.message,
-          '-- CORS may block browser requests; see README for proxy option.');
-      });
+      .catch(function () { console.warn('Brazos GeoJSON not found -- serve from same directory as HTML.'); });
 
-    // FEMA NFHL WMS raster layer (flood zone designations). Hidden by default.
+    // FEMA NFHL WMS fallback layer (raster, display only). Hidden by default.
     map.addSource('fema-nfhl', {
       type: 'raster',
       tiles: [
@@ -123,23 +102,52 @@
       ],
       tileSize: 256
     });
-    map.addLayer({
-      id: 'fema-nfhl-layer',
-      type: 'raster',
-      source: 'fema-nfhl',
-      paint: { 'raster-opacity': 0.55 },
-      layout: { visibility: 'none' }
-    });
+    map.addLayer({ id: 'fema-nfhl-layer', type: 'raster', source: 'fema-nfhl', paint: { 'raster-opacity': 0.55 }, layout: { visibility: 'none' } });
 
     document.getElementById('fema-toggle').addEventListener('change', function (e) {
       map.setLayoutProperty('fema-nfhl-layer', 'visibility', e.target.checked ? 'visible' : 'none');
     });
-    document.getElementById('boundary-toggle').addEventListener('change', function (e) {
-      var v = e.target.checked ? 'visible' : 'none';
-      map.setLayoutProperty('boundary-fill', 'visibility', v);
-      map.setLayoutProperty('boundary-line', 'visibility', v);
+    document.getElementById('brazos-toggle').addEventListener('change', function (e) {
+      if (map.getLayer('brazos-line')) {
+        map.setLayoutProperty('brazos-line', 'visibility', e.target.checked ? 'visible' : 'none');
+      }
     });
   });
+
+  // Query FEMA NFHL point-in-polygon via live REST API call.
+  // Returns zone classification for the given coordinates.
+  function checkFloodZone(coords) {
+    var lon = coords[0], lat = coords[1];
+    showStatus('Checking flood zone...');
+    var url = 'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query' +
+      '?geometry=' + encodeURIComponent(lon + ',' + lat) +
+      '&geometryType=esriGeometryPoint' +
+      '&spatialRel=esriSpatialRelIntersects' +
+      '&outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF' +
+      '&returnGeometry=false&f=json';
+    fetch(url)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.features || !data.features.length) {
+          showStatus('Flood zone data not available for this location.');
+          return;
+        }
+        var attrs = data.features[0].attributes;
+        var zone = attrs.FLD_ZONE || 'Unknown';
+        var subty = attrs.ZONE_SUBTY || '';
+        var sfha = attrs.SFHA_TF;
+        if (sfha === 'T' || zone === 'AE' || zone === 'AO' || zone === 'AH' || zone === 'VE' || zone === 'A') {
+          showStatus('HIGH RISK: FEMA flood zone ' + zone + (subty ? ' (' + subty + ')' : '') + '. Special Flood Hazard Area -- flood insurance typically required.', 'high-risk');
+        } else if (zone === 'X' || zone === 'B' || zone === 'C') {
+          showStatus('LOW RISK: FEMA flood zone ' + zone + (subty ? ' -- ' + subty : '') + '. Outside Special Flood Hazard Area.', 'low-risk');
+        } else {
+          showStatus('FEMA flood zone: ' + zone + (subty ? ' (' + subty + ')' : ''));
+        }
+      })
+      .catch(function () {
+        showStatus('Flood zone check failed. Check network or try again.');
+      });
+  }
 
   // Photon geocoding search.
   document.getElementById('search-form').addEventListener('submit', function (e) {
@@ -147,42 +155,22 @@
     var q = document.getElementById('search-input').value.trim();
     if (!q) return;
     showStatus('Searching...');
-    fetch('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q))
+    var url = 'https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q);
+    fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data.features || !data.features.length) {
-          showStatus('No match. Try a nearby intersection or landmark.'); return;
+          showStatus('No match. Photon struggles with new subdivisions -- try a nearby intersection.');
+          return;
         }
-        var coords = data.features[0].geometry.coordinates;
+        var f = data.features[0];
+        var coords = f.geometry.coordinates;
         map.flyTo({ center: coords, zoom: 15 });
         new maplibregl.Marker({ color: '#2a5d8f' }).setLngLat(coords).addTo(map);
-        checkPointInBoundary(coords);
+        checkFloodZone(coords);
       })
-      .catch(function () { showStatus('Photon error -- check network.'); });
+      .catch(function () { showStatus('Photon error. Check network.'); });
   });
-
-  // Point-in-polygon check against the loaded watershed polygons.
-  function checkPointInBoundary(coords) {
-    var src = map.getSource('boundary');
-    var data = src && src._data;
-    if (!data || !data.features || !data.features.length) {
-      showStatus('Located. Watershed boundary not yet loaded -- result shown without watershed check.'); return;
-    }
-    var pt = turf.point(coords);
-    var matchName = null;
-    data.features.forEach(function (feat) {
-      try {
-        if (turf.booleanPointInPolygon(pt, feat)) {
-          matchName = feat.properties && feat.properties.WTSHNAME || 'Addicks/Barker';
-        }
-      } catch (e) {}
-    });
-    if (matchName) {
-      showStatus('INSIDE ' + matchName + ' watershed. Property drains into this reservoir.', 'inside');
-    } else {
-      showStatus('OUTSIDE Addicks and Barker watersheds.', 'outside');
-    }
-  }
 
   // Browser geolocation.
   document.getElementById('locate-btn').addEventListener('click', function () {
@@ -193,13 +181,12 @@
         var c = [pos.coords.longitude, pos.coords.latitude];
         map.flyTo({ center: c, zoom: 15 });
         new maplibregl.Marker({ color: '#2a5d8f' }).setLngLat(c).addTo(map);
-        checkPointInBoundary(c);
+        checkFloodZone(c);
       },
       function () { showStatus('Location denied.'); },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   });
-
 })();
 </script>
 </body>
