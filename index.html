@@ -45,11 +45,12 @@
   <div id="map" aria-label="Map"></div>
   <div id="layer-toggles" role="group" aria-label="Layers">
     <label><input type="checkbox" id="brazos-toggle" checked /> Brazos River channel</label>
+    <label><input type="checkbox" id="fbcdd-toggle" /> FBCDD drainage districts</label>
     <div style="padding:3px 0;font-size:12px;color:#888;line-height:1.4;">FEMA visual map:<br><a href="https://msc.fema.gov/portal/search" target="_blank" rel="noopener" style="color:#2a5d8f;">msc.fema.gov</a></div>
   </div>
   <div id="status" role="status" aria-live="polite"></div>
   <div class="attrib">
-    Tiles: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> + <a href="https://www.openmaptiles.org" target="_blank" rel="noopener">OpenMapTiles</a> - Data: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> - Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> - Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a>
+    Tiles: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> + <a href="https://www.openmaptiles.org" target="_blank" rel="noopener">OpenMapTiles</a> - Data: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> - Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> - Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a> - Drainage: <a href="https://gis.fbctx.gov" target="_blank" rel="noopener">FBCDD</a>
   </div>
   <div id="disclaimer" class="disclaimer-banner">
     This tool provides informational overlays only and is not an official flood insurance determination. Consult FEMA maps and a licensed floodplain manager for insurance and disclosure purposes.
@@ -95,6 +96,35 @@
       if (map.getLayer('brazos-line')) {
         map.setLayoutProperty('brazos-line', 'visibility', e.target.checked ? 'visible' : 'none');
       }
+    });
+
+    // FBCDD drainage districts (Fort Bend County + Willow Fork). Sub-county admin boundaries.
+    // Source: gis.fbctx.gov DCAT autonomized 2026-05-24. 2 polygon features, 330.9 KB.
+    fetch('./fbcdd_drainage_districts.geojson')
+      .then(function (r) { return r.json(); })
+      .then(function (geo) {
+        map.addSource('fbcdd', { type: 'geojson', data: geo });
+        map.addLayer({
+          id: 'fbcdd-fill',
+          type: 'fill',
+          source: 'fbcdd',
+          layout: { visibility: 'none' },
+          paint: { 'fill-color': '#8e44ad', 'fill-opacity': 0.15 }
+        });
+        map.addLayer({
+          id: 'fbcdd-line',
+          type: 'line',
+          source: 'fbcdd',
+          layout: { visibility: 'none' },
+          paint: { 'line-color': '#6c3483', 'line-width': 1.5, 'line-opacity': 0.8 }
+        });
+      })
+      .catch(function () { console.warn('FBCDD GeoJSON not found.'); });
+
+    document.getElementById('fbcdd-toggle').addEventListener('change', function (e) {
+      var vis = e.target.checked ? 'visible' : 'none';
+      if (map.getLayer('fbcdd-fill')) map.setLayoutProperty('fbcdd-fill', 'visibility', vis);
+      if (map.getLayer('fbcdd-line')) map.setLayoutProperty('fbcdd-line', 'visibility', vis);
     });
   });
 
