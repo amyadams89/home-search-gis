@@ -70,3 +70,7 @@ Or connect the GitHub repo to Vercel dashboard -- zero config, static HTML deplo
 npx serve .
 # open http://localhost:3000
 ```
+
+## Deploys
+
+Pushes to `master` deploy automatically via the Vercel GitHub integration (connected 2026-10-16). Manual fallback: `vercel --prod` from the repo root.
