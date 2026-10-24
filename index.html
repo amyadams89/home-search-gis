@@ -41,6 +41,8 @@
     #cost-panel td[colspan] { text-align: center; }
     #cost-total { margin-top: 8px; font-size: 15px; font-weight: 600; }
     #cost-fine { margin-top: 8px; font-size: 11px; color: #666; line-height: 1.4; }
+    #cost-fine .warn { color: #a04000; font-weight: 600; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     @media (max-width: 480px) { #cost-panel { left: 8px; right: 8px; width: auto; } }
   </style>
 </head>
@@ -53,10 +55,10 @@
       <button type="submit">Find</button>
     </form>
     <button id="locate-btn" title="Use my location">Locate me</button>
-    <button id="cost-btn" type="button" aria-controls="cost-panel" aria-expanded="false">True cost</button>
+    <button id="cost-btn" type="button" aria-controls="cost-panel" aria-expanded="false">Monthly cost</button>
   </header>
-  <div id="cost-panel" role="region" aria-label="True cost estimate">
-    <h2>True monthly cost (range)</h2>
+  <div id="cost-panel" role="region" aria-label="Estimated monthly cost">
+    <h2>Estimated monthly cost (rate range)</h2>
     <form id="cost-form" autocomplete="off">
       <label>Home price ($) <input id="cost-price" type="text" inputmode="numeric" value="400000" /></label>
       <label>Down payment ($) <input id="cost-down" type="text" inputmode="numeric" value="80000" /></label>
@@ -71,17 +73,17 @@
       <label>HOA ($/mo) <input id="cost-hoa" type="text" inputmode="numeric" value="0" /></label>
     </form>
     <table aria-label="Monthly cost by mortgage rate">
-      <thead><tr><th></th><th>Low (P10)</th><th>Mid (P50)</th><th>High (P90)</th></tr></thead>
+      <thead><tr><th><span class="sr-only">Item</span></th><th>Low (P10)</th><th>Mid (P50)</th><th>High (P90)</th></tr></thead>
       <tbody>
         <tr><td>Rate</td><td id="r-p10">-</td><td id="r-p50">-</td><td id="r-p90">-</td></tr>
         <tr><td>Principal + interest</td><td id="pi-p10">-</td><td id="pi-p50">-</td><td id="pi-p90">-</td></tr>
         <tr><td>Property tax</td><td colspan="3" id="c-tax">-</td></tr>
         <tr><td>Insurance</td><td colspan="3" id="c-ins">-</td></tr>
         <tr><td>HOA</td><td colspan="3" id="c-hoa">-</td></tr>
-        <tr><td>All-in</td><td id="t-p10">-</td><td id="t-p50">-</td><td id="t-p90">-</td></tr>
+        <tr><td>Total</td><td id="t-p10">-</td><td id="t-p50">-</td><td id="t-p90">-</td></tr>
       </tbody>
     </table>
-    <div id="cost-total" aria-live="polite"></div>
+    <div id="cost-total"></div>
     <div id="cost-fine"></div>
   </div>
   <div id="map" aria-label="Map"></div>
@@ -245,12 +247,22 @@
     harris: { name: 'Harris', rate: 1.49, src: 'https://ownwell.com/trends/texas/harris-county', srcDate: '2026-04-13' }
   };
   var LOAN_MONTHS = 360;
+  var STALE_DAYS = 21;  // refreshed weekly (REFRESH.md); warn once three weeks have passed
+  function staleDays(isoDate) {
+    var t = Date.parse(isoDate + 'T00:00:00');
+    return isFinite(t) ? (Date.now() - t) / 86400000 : Infinity;
+  }
   var ranges = null;
 
-  function num(id) {
-    var v = parseFloat(String(document.getElementById(id).value).replace(/[$,\s%]/g, ''));
-    return isFinite(v) && v >= 0 ? v : null;
+  // Plain non-negative numbers only ("400000", "$400,000", "1.64%"); anything else
+  // ("400k", "1,64", "1.6.4") is rejected rather than silently truncated.
+  function num(id, max) {
+    var s = String(document.getElementById(id).value).replace(/[$,\s%]/g, '');
+    if (!/^\d+(\.\d+)?$/.test(s)) return null;
+    var v = parseFloat(s);
+    return v <= max ? v : null;
   }
+  function isBlank(id) { return String(document.getElementById(id).value).trim() === ''; }
   function usd(x) { return '$' + Math.round(x).toLocaleString('en-US'); }
   function setText(id, s) { document.getElementById(id).textContent = s; }
   function monthlyPI(principal, annualRatePct) {
@@ -263,21 +275,29 @@
   function renderCost() {
     var fine = document.getElementById('cost-fine');
     var county = COUNTY_TAX[document.getElementById('cost-county').value];
-    var price = num('cost-price'), down = num('cost-down'), taxRate = num('cost-taxrate');
-    var ins = num('cost-ins'), hoa = num('cost-hoa');
-    if (hoa === null) hoa = 0;
+    var price = num('cost-price', 1e9), down = num('cost-down', 1e9), taxRate = num('cost-taxrate', 10);
+    var insBlank = isBlank('cost-ins');
+    var ins = insBlank ? null : num('cost-ins', 1e7);
+    var hoa = isBlank('cost-hoa') ? 0 : num('cost-hoa', 1e5);
     fine.textContent = '';
     var parts = [
       'Estimates only; not a loan quote or financial advice.',
       '30-year fixed, principal and interest only; PMI, closing costs and rate points are not included.',
       'Property tax default: ' + county.name + ' County median effective rate ' + county.rate +
         '% (approximate; actual rate depends on taxing units at the address). Source: ' +
-        county.src + ' (updated ' + county.srcDate + '). A new purchase can pay more than the median, since exemptions and appraisal caps lower long-held homesteads. Enter the address\'s actual combined rate if you know it.'
+        county.src + ' (updated ' + county.srcDate + '). A new purchase can pay more than the median, since exemptions and appraisal caps lower long-held homesteads, and areas with a MUD (municipal utility district) add its rate on top. Enter the address\'s actual combined rate if you know it.'
     ];
     if (ranges) {
       parts.push('Rates: P10/P50/P90 of the Freddie Mac 30-year rate ' + ranges.horizon_days +
-        ' days after ' + ranges.as_of + ' (current ' + ranges.current + '%), from an empirical baseline forecast. In held-out back-testing, ' +
-        Math.round(ranges.held_out.coverage_80 * 100) + '% of outcomes fell inside the P10 to P90 band. Your own quote depends on credit, points and lender.');
+        ' days after ' + ranges.as_of + ' (current ' + ranges.current + '%), from an empirical baseline forecast. In held-out back-testing about ' +
+        Math.round(ranges.held_out.coverage_80 * 10) + ' in 10 outcomes fell inside the P10 to P90 band (small sample: ' +
+        ranges.held_out.n_effective + ' independent periods). Only the rate varies across the columns; tax, insurance and HOA are single estimates. Your own quote depends on credit, points and lender.');
+      if (staleDays(ranges.as_of) > STALE_DAYS) {
+        var w = document.createElement('div');
+        w.className = 'warn';
+        w.textContent = 'Rate range is out of date (as of ' + ranges.as_of + '); treat it as a rough guide only.';
+        fine.appendChild(w);
+      }
     }
     parts.forEach(function (p) { var d = document.createElement('div'); d.textContent = p; fine.appendChild(d); });
 
@@ -287,8 +307,8 @@
       setText('c-tax', '-'); setText('c-ins', '-'); setText('c-hoa', '-');
     }
     if (!ranges) { blank(); setText('cost-total', 'Mortgage rate ranges unavailable.'); return; }
-    if (price === null || down === null || taxRate === null || down > price) {
-      blank(); setText('cost-total', 'Enter a price, a down payment no larger than the price, and a tax rate.'); return;
+    if (price === null || down === null || taxRate === null || hoa === null || (!insBlank && ins === null) || down > price) {
+      blank(); setText('cost-total', 'Enter plain numbers: a price, a down payment no larger than the price, a tax rate up to 10%, and optional insurance and HOA.'); return;
     }
     var loan = price - down;
     var taxMo = price * taxRate / 100 / 12;
@@ -305,7 +325,7 @@
     setText('c-tax', usd(taxMo));
     setText('c-ins', ins === null ? 'not included' : usd(insMo));
     setText('c-hoa', usd(hoa));
-    setText('cost-total', 'All-in: ' + usd(totals.p10) + ' to ' + usd(totals.p90) + ' per month (mid ' + usd(totals.p50) + ')' +
+    setText('cost-total', 'Estimated total: ' + usd(totals.p10) + ' to ' + usd(totals.p90) + ' per month (mid ' + usd(totals.p50) + ')' +
       (ins === null ? ', insurance not included' : ''));
   }
 
@@ -315,13 +335,21 @@
     // The header wraps on narrow screens; keep the panel (and its toggle button) clear of it.
     var top = document.querySelector('header').offsetHeight + 8;
     costPanel.style.top = top + 'px';
-    costPanel.style.maxHeight = 'calc(100vh - ' + (top + 100) + 'px)';
+    costPanel.style.maxHeight = 'calc(100vh - ' + (top + 140) + 'px)';
   }
   window.addEventListener('resize', placeCostPanel);
   costBtn.addEventListener('click', function () {
     placeCostPanel();
     var open = costPanel.classList.toggle('visible');
     costBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) document.getElementById('cost-price').focus();
+  });
+  costPanel.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      costPanel.classList.remove('visible');
+      costBtn.setAttribute('aria-expanded', 'false');
+      costBtn.focus();
+    }
   });
   var countySel = document.getElementById('cost-county');
   function applyCountyDefault() { document.getElementById('cost-taxrate').value = COUNTY_TAX[countySel.value].rate; }
@@ -331,7 +359,10 @@
   applyCountyDefault();
   fetch('./mortgage_ranges.json')
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (d) { ranges = d; renderCost(); })
+    .then(function (d) {
+      if (!d || !d.quantiles || !d.held_out) throw new Error('bad ranges file');
+      ranges = d; renderCost();
+    })
     .catch(function () { ranges = null; renderCost(); });
   renderCost();
 
