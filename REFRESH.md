@@ -1,0 +1,22 @@
+# Refreshing the true-cost panel data
+
+`mortgage_ranges.json` holds the P05 to P95 range for the 30-year fixed mortgage rate
+(Freddie Mac PMMS, FRED series `MORTGAGE30US`) 90 days after its `as_of` date. The panel
+reads it at page load and prints `as_of` in its fine print.
+
+Refresh weekly (PMMS publishes Thursdays):
+
+```bash
+python scripts/refresh_mortgage_ranges.py
+git diff mortgage_ranges.json   # check as_of moved and the quantiles look sane
+```
+
+The script runs `foresight_baseline.py forecast --series MORTGAGE30US --horizon-days 90 --tuned --floor 0`
+from the Scripts repo (override the path with `FORESIGHT_BASELINE=<path>`). `held_out` records the
+forecaster's out-of-sample coverage (the share of past outcomes that landed inside the 80% and 50%
+bands); an 80% coverage well outside 0.65 to 0.95 means the range should not be trusted.
+
+Pushing to `master` deploys publicly within seconds. Commit the refreshed JSON on its own.
+
+Property-tax defaults live in `index.html` (`COUNTY_TAX`), each with a dated source URL.
+Re-check them once a year after counties adopt rates (October).

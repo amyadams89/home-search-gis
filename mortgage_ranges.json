@@ -1,0 +1,31 @@
+{
+  "series": "MORTGAGE30US",
+  "description": "Freddie Mac PMMS 30-year fixed mortgage rate (percent), empirical distribution of the rate 90 days after as_of.",
+  "as_of": "2026-10-22",
+  "current": 7.32,
+  "horizon_days": 90,
+  "quantiles": {
+    "p05": 6.8,
+    "p10": 6.93,
+    "p25": 7.07,
+    "p50": 7.26,
+    "p75": 7.54,
+    "p90": 7.84,
+    "p95": 8.035
+  },
+  "held_out": {
+    "window": [
+      0.7,
+      1.0
+    ],
+    "origins_scored": 200,
+    "n_effective": 56,
+    "coverage_80": 0.825,
+    "coverage_80_se": 0.053,
+    "coverage_50": 0.575,
+    "coverage_50_se": 0.067
+  },
+  "warnings": [],
+  "generated_on": "2026-10-24",
+  "generator": "foresight_baseline.py forecast --series MORTGAGE30US --horizon-days 90 --tuned --floor 0"
+}

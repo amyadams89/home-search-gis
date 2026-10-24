@@ -30,6 +30,18 @@
       font-size: 13px; text-align: center; color: #666;
       border-top: 1px solid #ddd;
     }
+    #cost-panel { position: absolute; top: 70px; left: 50px; width: 330px; max-width: calc(100vw - 16px); max-height: calc(100vh - 170px); overflow-y: auto; background: var(--panel); padding: 10px 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.2); font-size: 13px; display: none; z-index: 5; }
+    #cost-panel.visible { display: block; }
+    #cost-panel h2 { font-size: 14px; margin: 0 0 6px; }
+    #cost-panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 0; }
+    #cost-panel input, #cost-panel select { width: 130px; padding: 5px 6px; font-size: 14px; border: 1px solid #bbb; border-radius: 4px; }
+    #cost-panel table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    #cost-panel td, #cost-panel th { padding: 3px 4px; text-align: right; border-bottom: 1px solid #eee; }
+    #cost-panel td:first-child, #cost-panel th:first-child { text-align: left; }
+    #cost-panel td[colspan] { text-align: center; }
+    #cost-total { margin-top: 8px; font-size: 15px; font-weight: 600; }
+    #cost-fine { margin-top: 8px; font-size: 11px; color: #666; line-height: 1.4; }
+    @media (max-width: 480px) { #cost-panel { left: 8px; right: 8px; width: auto; } }
   </style>
 </head>
 <body>
@@ -41,7 +53,37 @@
       <button type="submit">Find</button>
     </form>
     <button id="locate-btn" title="Use my location">Locate me</button>
+    <button id="cost-btn" type="button" aria-controls="cost-panel" aria-expanded="false">True cost</button>
   </header>
+  <div id="cost-panel" role="region" aria-label="True cost estimate">
+    <h2>True monthly cost (range)</h2>
+    <form id="cost-form" autocomplete="off">
+      <label>Home price ($) <input id="cost-price" type="text" inputmode="numeric" value="400000" /></label>
+      <label>Down payment ($) <input id="cost-down" type="text" inputmode="numeric" value="80000" /></label>
+      <label>County
+        <select id="cost-county">
+          <option value="fortbend">Fort Bend</option>
+          <option value="harris">Harris</option>
+        </select>
+      </label>
+      <label>Tax rate (%/yr) <input id="cost-taxrate" type="text" inputmode="decimal" /></label>
+      <label>Insurance ($/yr, optional) <input id="cost-ins" type="text" inputmode="numeric" placeholder="optional" /></label>
+      <label>HOA ($/mo) <input id="cost-hoa" type="text" inputmode="numeric" value="0" /></label>
+    </form>
+    <table aria-label="Monthly cost by mortgage rate">
+      <thead><tr><th></th><th>Low (P10)</th><th>Mid (P50)</th><th>High (P90)</th></tr></thead>
+      <tbody>
+        <tr><td>Rate</td><td id="r-p10">-</td><td id="r-p50">-</td><td id="r-p90">-</td></tr>
+        <tr><td>Principal + interest</td><td id="pi-p10">-</td><td id="pi-p50">-</td><td id="pi-p90">-</td></tr>
+        <tr><td>Property tax</td><td colspan="3" id="c-tax">-</td></tr>
+        <tr><td>Insurance</td><td colspan="3" id="c-ins">-</td></tr>
+        <tr><td>HOA</td><td colspan="3" id="c-hoa">-</td></tr>
+        <tr><td>All-in</td><td id="t-p10">-</td><td id="t-p50">-</td><td id="t-p90">-</td></tr>
+      </tbody>
+    </table>
+    <div id="cost-total" aria-live="polite"></div>
+    <div id="cost-fine"></div>
+  </div>
   <div id="map" aria-label="Map"></div>
   <div id="layer-toggles" role="group" aria-label="Layers">
     <label><input type="checkbox" id="brazos-toggle" checked /> Brazos River channel</label>
@@ -54,7 +96,7 @@
     Tiles: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> + <a href="https://www.openmaptiles.org" target="_blank" rel="noopener">OpenMapTiles</a> - Data: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> - Geocoding: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a> - Flood zones: <a href="https://hazards.fema.gov" target="_blank" rel="noopener">FEMA NFHL</a> - Drainage: <a href="https://gis.fbctx.gov" target="_blank" rel="noopener">FBCDD</a>
   </div>
   <div id="disclaimer" class="disclaimer-banner">
-    This tool provides informational overlays only and is not an official flood insurance determination. Consult FEMA maps and a licensed floodplain manager for insurance and disclosure purposes.
+    This tool provides informational overlays only and is not an official flood insurance determination. Consult FEMA maps and a licensed floodplain manager for insurance and disclosure purposes. Cost estimates only; not a loan quote or financial advice.
   </div>
 </div>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -188,6 +230,110 @@
         showStatus('Flood zone check failed. Check network or try again.');
       });
   }
+
+  // True-cost panel: monthly principal + interest at P10/P50/P90 30-year rates
+  // (mortgage_ranges.json, see REFRESH.md) plus property tax, insurance and HOA.
+  // User inputs only; nothing is stored or sent anywhere.
+  // Property-tax defaults are MEDIAN EFFECTIVE rates (tax bill / market value, after
+  // exemptions), checked 2026-10-24:
+  //   Fort Bend 1.64%: https://ownwell.com/trends/texas/fort-bend-county (last updated 2026-04-13)
+  //   Harris    1.49%: https://ownwell.com/trends/texas/harris-county (last updated 2026-04-13)
+  // Neither county publishes a single all-in rate; the real rate depends on the taxing
+  // units (county, ISD, city, MUD, drainage) at the address.
+  var COUNTY_TAX = {
+    fortbend: { name: 'Fort Bend', rate: 1.64, src: 'https://ownwell.com/trends/texas/fort-bend-county', srcDate: '2026-04-13' },
+    harris: { name: 'Harris', rate: 1.49, src: 'https://ownwell.com/trends/texas/harris-county', srcDate: '2026-04-13' }
+  };
+  var LOAN_MONTHS = 360;
+  var ranges = null;
+
+  function num(id) {
+    var v = parseFloat(String(document.getElementById(id).value).replace(/[$,\s%]/g, ''));
+    return isFinite(v) && v >= 0 ? v : null;
+  }
+  function usd(x) { return '$' + Math.round(x).toLocaleString('en-US'); }
+  function setText(id, s) { document.getElementById(id).textContent = s; }
+  function monthlyPI(principal, annualRatePct) {
+    if (principal <= 0) return 0;
+    var r = annualRatePct / 100 / 12;
+    if (r === 0) return principal / LOAN_MONTHS;
+    return principal * r / (1 - Math.pow(1 + r, -LOAN_MONTHS));
+  }
+
+  function renderCost() {
+    var fine = document.getElementById('cost-fine');
+    var county = COUNTY_TAX[document.getElementById('cost-county').value];
+    var price = num('cost-price'), down = num('cost-down'), taxRate = num('cost-taxrate');
+    var ins = num('cost-ins'), hoa = num('cost-hoa');
+    if (hoa === null) hoa = 0;
+    fine.textContent = '';
+    var parts = [
+      'Estimates only; not a loan quote or financial advice.',
+      '30-year fixed, principal and interest only; PMI, closing costs and rate points are not included.',
+      'Property tax default: ' + county.name + ' County median effective rate ' + county.rate +
+        '% (approximate; actual rate depends on taxing units at the address). Source: ' +
+        county.src + ' (updated ' + county.srcDate + '). A new purchase can pay more than the median, since exemptions and appraisal caps lower long-held homesteads. Enter the address\'s actual combined rate if you know it.'
+    ];
+    if (ranges) {
+      parts.push('Rates: P10/P50/P90 of the Freddie Mac 30-year rate ' + ranges.horizon_days +
+        ' days after ' + ranges.as_of + ' (current ' + ranges.current + '%), from an empirical baseline forecast. In held-out back-testing, ' +
+        Math.round(ranges.held_out.coverage_80 * 100) + '% of outcomes fell inside the P10 to P90 band. Your own quote depends on credit, points and lender.');
+    }
+    parts.forEach(function (p) { var d = document.createElement('div'); d.textContent = p; fine.appendChild(d); });
+
+    var cols = ['p10', 'p50', 'p90'];
+    function blank() {
+      cols.forEach(function (c) { setText('r-' + c, '-'); setText('pi-' + c, '-'); setText('t-' + c, '-'); });
+      setText('c-tax', '-'); setText('c-ins', '-'); setText('c-hoa', '-');
+    }
+    if (!ranges) { blank(); setText('cost-total', 'Mortgage rate ranges unavailable.'); return; }
+    if (price === null || down === null || taxRate === null || down > price) {
+      blank(); setText('cost-total', 'Enter a price, a down payment no larger than the price, and a tax rate.'); return;
+    }
+    var loan = price - down;
+    var taxMo = price * taxRate / 100 / 12;
+    var insMo = ins === null ? 0 : ins / 12;
+    var totals = {};
+    cols.forEach(function (c) {
+      var rate = ranges.quantiles[c];
+      var pi = monthlyPI(loan, rate);
+      totals[c] = pi + taxMo + insMo + hoa;
+      setText('r-' + c, rate.toFixed(2) + '%');
+      setText('pi-' + c, usd(pi));
+      setText('t-' + c, usd(totals[c]));
+    });
+    setText('c-tax', usd(taxMo));
+    setText('c-ins', ins === null ? 'not included' : usd(insMo));
+    setText('c-hoa', usd(hoa));
+    setText('cost-total', 'All-in: ' + usd(totals.p10) + ' to ' + usd(totals.p90) + ' per month (mid ' + usd(totals.p50) + ')' +
+      (ins === null ? ', insurance not included' : ''));
+  }
+
+  var costPanel = document.getElementById('cost-panel');
+  var costBtn = document.getElementById('cost-btn');
+  function placeCostPanel() {
+    // The header wraps on narrow screens; keep the panel (and its toggle button) clear of it.
+    var top = document.querySelector('header').offsetHeight + 8;
+    costPanel.style.top = top + 'px';
+    costPanel.style.maxHeight = 'calc(100vh - ' + (top + 100) + 'px)';
+  }
+  window.addEventListener('resize', placeCostPanel);
+  costBtn.addEventListener('click', function () {
+    placeCostPanel();
+    var open = costPanel.classList.toggle('visible');
+    costBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  var countySel = document.getElementById('cost-county');
+  function applyCountyDefault() { document.getElementById('cost-taxrate').value = COUNTY_TAX[countySel.value].rate; }
+  countySel.addEventListener('change', function () { applyCountyDefault(); renderCost(); });
+  document.getElementById('cost-form').addEventListener('input', renderCost);
+  document.getElementById('cost-form').addEventListener('submit', function (e) { e.preventDefault(); });
+  applyCountyDefault();
+  fetch('./mortgage_ranges.json')
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (d) { ranges = d; renderCost(); })
+    .catch(function () { ranges = null; renderCost(); });
+  renderCost();
 
   // Photon geocoding search.
   document.getElementById('search-form').addEventListener('submit', function (e) {
