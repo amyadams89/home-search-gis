@@ -2,7 +2,10 @@
 
 `mortgage_ranges.json` holds the P05 to P95 range for the 30-year fixed mortgage rate
 (Freddie Mac PMMS, FRED series `MORTGAGE30US`) 90 days after its `as_of` date. The panel
-reads it at page load and prints `as_of` in its fine print.
+reads it at page load and prints `as_of` in its fine print. The "Latest" column uses
+`current`, the PMMS rate on `as_of`. The page rejects the file (and shows "unavailable") if
+`as_of` is not a date, if `current` or P10/P50/P90 is not a rate between 0 and 25 or they are out
+of order, or if `horizon_days`, `held_out.coverage_80` or `held_out.n_effective` is missing.
 
 Refresh weekly (PMMS publishes Thursdays):
 
@@ -15,7 +18,8 @@ The script runs `foresight_baseline.py forecast --series MORTGAGE30US --horizon-
 (path as an argument or in `FORESIGHT_BASELINE`). `held_out` records the forecaster's out-of-sample
 coverage (the share of past outcomes that landed inside the 80% and 50% bands). The script refuses to
 write when the quantiles are out of order, the forecaster warns, 80% coverage is outside 0.65 to 0.95,
-or `as_of` is more than 14 days old. The page shows an out-of-date warning once `as_of` is 21 days old.
+or `as_of` is more than 14 days old. It also gives up, writing nothing, if the forecaster runs
+longer than 600 s (`TIMEOUT_S`; a normal run takes a few seconds). The page shows an out-of-date warning once `as_of` is 21 days old.
 
 Pushing to `master` deploys publicly within seconds. Commit the refreshed JSON on its own.
 

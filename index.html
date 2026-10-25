@@ -42,6 +42,8 @@
     #cost-total { margin-top: 8px; font-size: 15px; font-weight: 600; }
     #cost-fine { margin-top: 8px; font-size: 11px; color: #666; line-height: 1.4; }
     #cost-fine .warn { color: #a04000; font-weight: 600; }
+    #cost-panel .warn-box { margin: 2px 0 4px; padding: 4px 8px; border-left: 4px solid #c0392b; background: #fdf0ed; color: #7a2418; font-size: 13px; font-weight: 600; line-height: 1.4; }
+    #cost-panel .warn-box[hidden] { display: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     @media (max-width: 480px) { #cost-panel { left: 8px; right: 8px; width: auto; } }
   </style>
@@ -69,18 +71,19 @@
         </select>
       </label>
       <label>Tax rate (%/yr) <input id="cost-taxrate" type="text" inputmode="decimal" /></label>
-      <label>Insurance ($/yr, optional) <input id="cost-ins" type="text" inputmode="numeric" placeholder="optional" /></label>
+      <label>Insurance ($/yr) <input id="cost-ins" type="text" inputmode="numeric" placeholder="home + flood" /></label>
+      <div id="cost-ins-note" class="warn-box" hidden>Not in the totals: enter a yearly home + flood quote.</div>
       <label>HOA ($/mo) <input id="cost-hoa" type="text" inputmode="numeric" value="0" /></label>
     </form>
     <table aria-label="Monthly cost by mortgage rate">
-      <thead><tr><th><span class="sr-only">Item</span></th><th>Low (P10)</th><th>Mid (P50)</th><th>High (P90)</th></tr></thead>
+      <thead><tr><th><span class="sr-only">Item</span></th><th id="h-now">Latest</th><th>Low (P10)</th><th>Mid (P50)</th><th>High (P90)</th></tr></thead>
       <tbody>
-        <tr><td>Rate</td><td id="r-p10">-</td><td id="r-p50">-</td><td id="r-p90">-</td></tr>
-        <tr><td>Principal + interest</td><td id="pi-p10">-</td><td id="pi-p50">-</td><td id="pi-p90">-</td></tr>
-        <tr><td>Property tax</td><td colspan="3" id="c-tax">-</td></tr>
-        <tr><td>Insurance</td><td colspan="3" id="c-ins">-</td></tr>
-        <tr><td>HOA</td><td colspan="3" id="c-hoa">-</td></tr>
-        <tr><td>Total</td><td id="t-p10">-</td><td id="t-p50">-</td><td id="t-p90">-</td></tr>
+        <tr><td>Rate</td><td id="r-now">-</td><td id="r-p10">-</td><td id="r-p50">-</td><td id="r-p90">-</td></tr>
+        <tr><td>Principal + interest</td><td id="pi-now">-</td><td id="pi-p10">-</td><td id="pi-p50">-</td><td id="pi-p90">-</td></tr>
+        <tr><td>Property tax</td><td colspan="4" id="c-tax">-</td></tr>
+        <tr><td>Insurance</td><td colspan="4" id="c-ins">-</td></tr>
+        <tr><td>HOA</td><td colspan="4" id="c-hoa">-</td></tr>
+        <tr><td>Total</td><td id="t-now">-</td><td id="t-p10">-</td><td id="t-p50">-</td><td id="t-p90">-</td></tr>
       </tbody>
     </table>
     <div id="cost-total" aria-live="polite"></div>
@@ -275,6 +278,7 @@
 
   function renderCost() {
     var fine = document.getElementById('cost-fine');
+    var stale = false;
     var county = COUNTY_TAX[document.getElementById('cost-county').value];
     var price = num('cost-price', 1e9), down = num('cost-down', 1e9), taxRate = num('cost-taxrate', 10);
     var insBlank = isBlank('cost-ins');
@@ -284,16 +288,19 @@
     var parts = [
       'Estimates only; not a loan quote or financial advice.',
       '30-year fixed, principal and interest only; PMI, closing costs and rate points are not included.',
+      'Insurance: homeowners and flood insurance are separate policies. Federal law requires flood insurance for most mortgages on homes in a FEMA Special Flood Hazard Area. Homes outside these zones also flood; there, coverage is optional under federal law, though some lenders require it.',
       'Property tax default: ' + county.name + ' County median effective rate ' + county.rate +
         '% (approximate; actual rate depends on taxing units at the address). Source: ' +
         county.src + ' (updated ' + county.srcDate + '). A new purchase can pay more than the median, since exemptions and appraisal caps lower long-held homesteads, and areas with a MUD (municipal utility district) add its rate on top. Enter the address\'s actual combined rate if you know it.'
     ];
     if (ranges) {
       parts.push('Rates: this site\'s own forecast (not Freddie Mac\'s) of the Freddie Mac PMMS 30-year fixed rate ' + ranges.horizon_days +
-        ' days after ' + ranges.as_of + ', built from PMMS history via FRED. P10/P90 mean a 1 in 10 chance of being below/above. The rate on ' + ranges.as_of + ' was ' + ranges.current + '%. In held-out back-testing about ' +
+        ' days after ' + ranges.as_of + ', built from PMMS history via FRED. P10/P90 mean a 1 in 10 chance of being below/above. The Latest column uses the latest PMMS rate in this data file, ' + ranges.current + '% on ' + ranges.as_of + '. In held-out back-testing about ' +
         Math.round(ranges.held_out.coverage_80 * 10) + ' in 10 outcomes fell inside the P10 to P90 band (small sample: ' +
         ranges.held_out.n_effective + ' independent periods). Only the rate varies across the columns; tax, insurance and HOA are single estimates. Your own quote depends on credit, points and lender.');
-      if (staleDays(ranges.as_of) > STALE_DAYS) {
+      stale = staleDays(ranges.as_of) > STALE_DAYS;
+      setText('h-now', 'Latest (' + ranges.as_of + (stale ? ', out of date' : '') + ')');
+      if (stale) {
         var w = document.createElement('div');
         w.className = 'warn';
         w.textContent = 'Rate range is out of date (as of ' + ranges.as_of + '); treat it as a rough guide only.';
@@ -302,12 +309,19 @@
     }
     parts.forEach(function (p) { var d = document.createElement('div'); d.textContent = p; fine.appendChild(d); });
 
-    var cols = ['p10', 'p50', 'p90'];
+    var cols = ['now', 'p10', 'p50', 'p90'];
+    var insNote = document.getElementById('cost-ins-note');
+    function showInsNote(show) {
+      insNote.hidden = !show;
+      var input = document.getElementById('cost-ins');
+      if (show) input.setAttribute('aria-describedby', 'cost-ins-note'); else input.removeAttribute('aria-describedby');
+    }
     function blank() {
       cols.forEach(function (c) { setText('r-' + c, '-'); setText('pi-' + c, '-'); setText('t-' + c, '-'); });
       setText('c-tax', '-'); setText('c-ins', '-'); setText('c-hoa', '-');
+      showInsNote(false);
     }
-    if (!ranges) { blank(); setText('cost-total', 'Mortgage rate ranges unavailable.'); return; }
+    if (!ranges) { blank(); setText('h-now', 'Latest'); setText('cost-total', 'Mortgage rate ranges unavailable.'); return; }
     if (price === null || price <= 0 || down === null || taxRate === null || hoa === null || (!insBlank && ins === null) || down > price) {
       blank(); setText('cost-total', 'Enter plain numbers: a price, a down payment no larger than the price, a tax rate up to 10%, and optional insurance and HOA.'); return;
     }
@@ -316,7 +330,7 @@
     var insMo = ins === null ? 0 : ins / 12;
     var totals = {};
     cols.forEach(function (c) {
-      var rate = ranges.quantiles[c];
+      var rate = c === 'now' ? ranges.current : ranges.quantiles[c];
       var pi = monthlyPI(loan, rate);
       totals[c] = pi + taxMo + insMo + hoa;
       setText('r-' + c, rate.toFixed(2) + '%');
@@ -326,7 +340,8 @@
     setText('c-tax', usd(taxMo));
     setText('c-ins', ins === null ? 'not included' : usd(insMo));
     setText('c-hoa', usd(hoa));
-    setText('cost-total', 'Estimated total: ' + usd(totals.p10) + ' to ' + usd(totals.p90) + ' per month (mid ' + usd(totals.p50) + ')' +
+    showInsNote(ins === null);
+    setText('cost-total', 'Estimated total: ' + usd(totals.p10) + ' to ' + usd(totals.p90) + ' per month (mid ' + usd(totals.p50) + '; ' + usd(totals.now) + ' at the ' + ranges.as_of + ' rate)' +
       (ins === null ? ', insurance not included' : '') +
       (taxRate === county.rate ? '; tax at the county median, likely low for a new purchase' : ''));
   }
@@ -334,12 +349,15 @@
   var costPanel = document.getElementById('cost-panel');
   var costBtn = document.getElementById('cost-btn');
   function placeCostPanel() {
-    // The header wraps on narrow screens; keep the panel (and its toggle button) clear of it.
+    // The header wraps on narrow screens; keep the panel and the layer toggles below it so
+    // they never cover its buttons. (The open panel still covers the toggles below about 630 px.)
     var top = document.querySelector('header').offsetHeight + 8;
     costPanel.style.top = top + 'px';
     costPanel.style.maxHeight = 'calc(100vh - ' + (top + 140) + 'px)';
+    document.getElementById('layer-toggles').style.top = top + 'px';
   }
   window.addEventListener('resize', placeCostPanel);
+  placeCostPanel();
   costBtn.addEventListener('click', function () {
     placeCostPanel();
     var open = costPanel.classList.toggle('visible');
@@ -354,7 +372,17 @@
     }
   });
   var countySel = document.getElementById('cost-county');
-  function applyCountyDefault() { document.getElementById('cost-taxrate').value = COUNTY_TAX[countySel.value].rate; }
+  // A county switch replaces the tax rate unless the user has set their own: a rate that
+  // differs from the current county's default, or text that does not parse (kept so the
+  // input error stays visible). Blank, or typed back to the default, counts as not set.
+  var taxCustom = false;
+  document.getElementById('cost-taxrate').addEventListener('input', function () {
+    var v = num('cost-taxrate', 10);
+    taxCustom = v === null ? !isBlank('cost-taxrate') : v !== COUNTY_TAX[countySel.value].rate;
+  });
+  function applyCountyDefault() {
+    if (!taxCustom) document.getElementById('cost-taxrate').value = COUNTY_TAX[countySel.value].rate;
+  }
   countySel.addEventListener('change', function () { applyCountyDefault(); renderCost(); });
   document.getElementById('cost-form').addEventListener('input', renderCost);
   document.getElementById('cost-form').addEventListener('submit', function (e) { e.preventDefault(); });
@@ -362,7 +390,14 @@
   fetch('./mortgage_ranges.json')
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(function (d) {
-      if (!d || !d.quantiles || !d.held_out) throw new Error('bad ranges file');
+      // Checks every field the panel renders (rates in 0 to 25, P10 <= P50 <= P90, required
+      // numbers present); a hand-edited file that fails shows "unavailable".
+      var rate = function (v) { return typeof v === 'number' && isFinite(v) && v > 0 && v < 25; };
+      var fin = function (v) { return typeof v === 'number' && isFinite(v); };
+      var q = d && d.quantiles, h = d && d.held_out;
+      if (!d || !q || !h || !rate(d.current) || !rate(q.p10) || !rate(q.p50) || !rate(q.p90) ||
+          !(q.p10 <= q.p50 && q.p50 <= q.p90) || !fin(d.horizon_days) || !fin(h.coverage_80) ||
+          !fin(h.n_effective) || typeof d.as_of !== 'string' || !isFinite(Date.parse(d.as_of + 'T00:00:00'))) throw new Error('bad ranges file');
       ranges = d; renderCost();
     })
     .catch(function () { ranges = null; renderCost(); });

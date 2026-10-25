@@ -19,6 +19,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mortgage_r
 KEYS = ["p05", "p10", "p25", "p50", "p75", "p90", "p95"]
 MAX_AGE_DAYS = 14          # PMMS is weekly; an older as_of means the source did not update
 COVERAGE_80_OK = (0.65, 0.95)  # same band as the Home Search "proven" gate
+TIMEOUT_S = 600              # the forecaster fetches FRED; a hung fetch must not hang the refresh
 
 
 def problems(out):
@@ -49,8 +50,13 @@ def main():
     baseline = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("FORESIGHT_BASELINE")
     if not baseline:
         sys.exit("give the path to foresight_baseline.py (argument or FORESIGHT_BASELINE)")
-    proc = subprocess.run([sys.executable, baseline] + ARGS, capture_output=True,
-                          text=True, encoding="utf-8")
+    try:
+        proc = subprocess.run([sys.executable, baseline] + ARGS, capture_output=True,
+                              text=True, encoding="utf-8", timeout=TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        # e.stderr can be bytes, str or None depending on platform and timing; handle all three.
+        err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        sys.exit("forecaster did not finish within %d s, NOT written:\n%s" % (TIMEOUT_S, err[-2000:]))
     if proc.returncode != 0:
         sys.exit("forecaster failed (exit %d), NOT written:\n%s" % (proc.returncode, proc.stderr))
     d = json.loads(proc.stdout)
